@@ -1,12 +1,12 @@
-import { z } from "zod";
-import { randomUUID } from "node:crypto";
-import { prisma } from "../../lib/prisma";
-import { FastifyInstance } from "fastify";
+import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
+import { prisma } from '../../lib/prisma';
+import { FastifyInstance } from 'fastify';
 import { redis } from "../../lib/redis";
 import { voting } from "../../utils/voting-pub-sub";
 
 export async function voteOnPoll(app: FastifyInstance) {
-  app.post("/polls/:pollId/votes", async (request, reply) => {
+  app.post('/polls/:pollId/votes', async (request, reply) => {
     const voteOnPollBody = z.object({
       pollOptionId: z.string().uuid(),
     });
@@ -18,7 +18,7 @@ export async function voteOnPoll(app: FastifyInstance) {
     const { pollId } = voteOnPollParams.parse(request.params);
     const { pollOptionId } = voteOnPollBody.parse(request.body);
 
-    let sessionId = request.cookies.sessionId;
+    let { sessionId } = request.cookies;
 
     if (sessionId) {
       const userPreviousVoteOnPoll = await prisma.vote.findUnique({
@@ -26,49 +26,53 @@ export async function voteOnPoll(app: FastifyInstance) {
           sessionId_pollId: {
             sessionId,
             pollId,
-          },
-        },
-      });
+          }
+        }
+      })
 
-      if (
-        userPreviousVoteOnPoll &&
-        userPreviousVoteOnPoll.pollOptionId != pollOptionId
-      ) {
+      if (userPreviousVoteOnPoll && userPreviousVoteOnPoll.pollOptionId !== pollOptionId) {
         await prisma.vote.delete({
           where: {
             id: userPreviousVoteOnPoll.id,
-          },
-        });
+          }
+        })
 
-        await redis.zincrby(`poll:${pollId}`, -1, userPreviousVoteOnPoll.pollOptionId);
+        const votes = await redis.zincrby(pollId, -1, userPreviousVoteOnPoll.pollOptionId)
+
+        voting.publish(pollId, {
+          pollOptionId: userPreviousVoteOnPoll.pollOptionId,
+          votes: Number(votes),
+        })
       } else if (userPreviousVoteOnPoll) {
-        return reply
-          .status(400)
-          .send({ message: "You have already voted on this poll" });
+        return reply.status(400).send({ message: 'You have already voted on this poll' })
       }
     }
 
-    if (!sessionId) { // If the user does not have a session ID, create a new one
+    if (!sessionId) {
       sessionId = randomUUID();
-      reply.setCookie("sessionId", sessionId, {
-        path: "/",
-        maxAge: 60 * 60 * 24 * 7,
+
+      reply.setCookie('sessionId', sessionId, {
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
         signed: true,
         httpOnly: true,
       });
     }
 
-    await prisma.vote.create({ // Create a new vote record in the database
+    await prisma.vote.create({
       data: {
         sessionId,
         pollId,
         pollOptionId,
-      },
-    });
+      }
+    })
 
-    await redis.zincrby(`poll:${pollId}`, 1, pollOptionId); // Increment the vote count for the poll option in Redis sorted set
+    const votes = await redis.zincrby(pollId, 1, pollOptionId)
 
-    voting.publish(pollId, { pollOptionId, votes: 1 }); // Publish the vote to the WebSocket channel
+    voting.publish(pollId, {
+      pollOptionId,
+      votes: Number(votes),
+    })
 
     return reply.status(201).send();
   });
