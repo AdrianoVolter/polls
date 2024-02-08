@@ -14,7 +14,7 @@ app.register(cookie,{
     parseOptions: {}
 });
 
-app.register(fastifyWebsocket);
+app.register(fastifyWebsocket); 
 
 app.register(createPoll);
 app.register(getPoll);
