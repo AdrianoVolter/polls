@@ -38,6 +38,8 @@ export async function voteOnPoll(app: FastifyInstance) {
             id: userPreviousVoteOnPoll.id,
           },
         });
+
+        await redis.zincrby(`poll:${pollId}`, -1, userPreviousVoteOnPoll.pollOptionId);
       } else if (userPreviousVoteOnPoll) {
         return reply
           .status(400)
