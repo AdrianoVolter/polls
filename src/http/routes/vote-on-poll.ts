@@ -2,6 +2,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma";
 import { FastifyInstance } from "fastify";
+import { redis } from "../../lib/redis";
 
 export async function voteOnPoll(app: FastifyInstance) {
   app.post("/polls/:pollId/votes", async (request, reply) => {
@@ -44,7 +45,7 @@ export async function voteOnPoll(app: FastifyInstance) {
       }
     }
 
-    if (!sessionId) {
+    if (!sessionId) { // If the user does not have a session ID, create a new one
       sessionId = randomUUID();
       reply.setCookie("sessionId", sessionId, {
         path: "/",
@@ -54,13 +55,15 @@ export async function voteOnPoll(app: FastifyInstance) {
       });
     }
 
-    await prisma.vote.create({
+    await prisma.vote.create({ // Create a new vote record in the database
       data: {
         sessionId,
         pollId,
         pollOptionId,
       },
     });
+
+    await redis.zincrby(`poll:${pollId}`, 1, pollOptionId); // Increment the vote count for the poll option in Redis sorted set
 
     return reply.status(201).send();
   });
